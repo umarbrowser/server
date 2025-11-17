@@ -132,6 +132,13 @@ export async function initializeDatabase() {
     // Parse SQL statements properly handling PostgreSQL dollar-quoted strings
     const statements = parseSQLStatements(schema);
     
+    console.log(`📋 Parsed ${statements.length} SQL statements`);
+    
+    // Debug: Log first few statements
+    if (statements.length > 0) {
+      console.log(`   First statement: ${statements[0].substring(0, 60)}...`);
+    }
+    
     let successCount = 0;
     let skipCount = 0;
     let errorCount = 0;
@@ -150,9 +157,17 @@ export async function initializeDatabase() {
               error.code === '42710') { // duplicate_object
             skipCount++;
           } else {
-            // Log other errors but don't fail completely
-            console.warn(`⚠️  Warning executing statement: ${trimmed.substring(0, 50)}...`);
-            console.warn(`   Error: ${error.message}`);
+            // Log errors - especially important for CREATE TABLE
+            const isCreateTable = trimmed.toUpperCase().startsWith('CREATE TABLE');
+            if (isCreateTable) {
+              console.error(`❌ ERROR creating table: ${trimmed.substring(0, 80)}...`);
+              console.error(`   Error code: ${error.code}`);
+              console.error(`   Error message: ${error.message}`);
+              console.error(`   Error detail: ${error.detail || 'none'}`);
+            } else {
+              console.warn(`⚠️  Warning executing statement: ${trimmed.substring(0, 50)}...`);
+              console.warn(`   Error: ${error.message}`);
+            }
             errorCount++;
           }
         }
@@ -160,24 +175,29 @@ export async function initializeDatabase() {
     }
 
     // Verify critical tables were created
-    const [tables] = await pool.query(`
-      SELECT table_name 
-      FROM information_schema.tables 
-      WHERE table_schema = 'public' 
-      AND table_name IN ('users', 'courses', 'enrollments')
-    `);
-    
-    const tableNames = tables.map(t => t.table_name);
-    const criticalTables = ['users', 'courses', 'enrollments'];
-    const missingTables = criticalTables.filter(t => !tableNames.includes(t));
-    
-    if (missingTables.length > 0) {
-      console.error(`❌ Critical tables missing: ${missingTables.join(', ')}`);
-      console.error(`   Existing tables: ${tableNames.join(', ') || 'none'}`);
-      console.error(`   This indicates schema initialization had issues.`);
-      console.error(`   Please check the errors above and ensure all statements executed.`);
-    } else {
-      console.log(`✅ Critical tables verified: ${tableNames.join(', ')}`);
+    try {
+      const result = await pool.query(`
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name IN ('users', 'courses', 'enrollments')
+      `);
+      
+      const tableNames = result.rows.map(t => t.table_name);
+      const criticalTables = ['users', 'courses', 'enrollments'];
+      const missingTables = criticalTables.filter(t => !tableNames.includes(t));
+      
+      if (missingTables.length > 0) {
+        console.error(`❌ Critical tables missing: ${missingTables.join(', ')}`);
+        console.error(`   Existing tables: ${tableNames.join(', ') || 'none'}`);
+        console.error(`   This indicates schema initialization had issues.`);
+        console.error(`   Please check the errors above and ensure all statements executed.`);
+      } else {
+        console.log(`✅ Critical tables verified: ${tableNames.join(', ')}`);
+      }
+    } catch (verifyError) {
+      console.error(`❌ Error verifying tables: ${verifyError.message}`);
+      console.error(`   This might indicate a database connection or query issue.`);
     }
 
     console.log(`✅ Database schema initialized!`);
