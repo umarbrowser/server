@@ -139,29 +139,58 @@ router.post('/generate-outline', authenticateToken, async (req, res) => {
 
     console.log('Course outline generation request:', { topic, difficulty, userId: req.user.userId });
     
+    // Check if OpenAI API key is configured
+    if (!process.env.OPENAI_API_KEY) {
+      console.error('OPENAI_API_KEY is not set in environment variables');
+      return res.status(500).json({ 
+        error: 'OpenAI API key is not configured',
+        hint: 'Please add OPENAI_API_KEY to your Render environment variables'
+      });
+    }
+    
     const modules = await generateCourseOutline(topic, difficulty || 'beginner');
     
     console.log('Course outline generated successfully:', modules.length, 'modules');
     res.json({ modules });
   } catch (error) {
     console.error('Generate outline error:', error);
+    console.error('Error stack:', error.stack);
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      status: error.status,
+      response: error.response?.data
+    });
+    
     const errorMessage = error.message || 'Failed to generate course outline';
     
     // Return more specific error messages
-    if (errorMessage.includes('API key')) {
+    if (errorMessage.includes('API key') || errorMessage.includes('not configured')) {
       res.status(500).json({ 
-        error: errorMessage,
-        hint: 'Please check that OPENAI_API_KEY is set in your .env file and restart the server'
+        error: 'OpenAI API key is not configured',
+        hint: 'Please add OPENAI_API_KEY to your Render environment variables and restart the service'
       });
-    } else if (errorMessage.includes('rate limit')) {
-      res.status(429).json({ error: errorMessage });
-    } else if (errorMessage.includes('quota') || errorMessage.includes('401')) {
+    } else if (errorMessage.includes('rate limit') || errorMessage.includes('429')) {
+      res.status(429).json({ 
+        error: 'OpenAI API rate limit exceeded',
+        hint: 'Please try again later or upgrade your OpenAI plan'
+      });
+    } else if (errorMessage.includes('quota') || errorMessage.includes('401') || errorMessage.includes('insufficient')) {
       res.status(500).json({ 
-        error: errorMessage,
-        hint: 'Please check your OpenAI API key and billing status'
+        error: 'OpenAI API key issue',
+        hint: 'Please check your OpenAI API key validity and billing status in your OpenAI account'
+      });
+    } else if (errorMessage.includes('JSON') || errorMessage.includes('parse')) {
+      res.status(500).json({ 
+        error: 'Failed to parse AI response',
+        hint: 'The AI service returned an invalid response. Please try again.'
       });
     } else {
-      res.status(500).json({ error: errorMessage });
+      res.status(500).json({ 
+        error: errorMessage,
+        hint: 'Please check server logs for more details',
+        errorCode: error.code || 'UNKNOWN'
+      });
     }
   }
 });
