@@ -51,6 +51,14 @@ router.post('/register', async (req, res) => {
       [username, email, hashedPassword, fullName || null]
     );
 
+    // Debug: Log result structure
+    console.log('Insert result:', JSON.stringify(result, null, 2));
+    
+    if (!result || !result[0] || !result[0].id) {
+      console.error('Unexpected result structure:', result);
+      throw new Error('Failed to get user ID from insert result');
+    }
+
     const userId = result[0].id;
 
     // Generate JWT
@@ -97,9 +105,21 @@ router.post('/register', async (req, res) => {
       });
     }
 
+    // Log full error for debugging (always log, but only send details in dev)
+    console.error('Full error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint,
+      position: error.position,
+      stack: error.stack
+    });
+
     res.status(500).json({ 
       error: 'Server error during registration',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      // In production, still provide error code for debugging
+      errorCode: error.code || 'UNKNOWN'
     });
   }
 });

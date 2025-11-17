@@ -159,16 +159,40 @@ export async function initializeDatabase() {
       }
     }
 
-    console.log(`✅ Database schema initialized successfully!`);
+    // Verify critical tables were created
+    const [tables] = await pool.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name IN ('users', 'courses', 'enrollments')
+    `);
+    
+    const tableNames = tables.map(t => t.table_name);
+    const criticalTables = ['users', 'courses', 'enrollments'];
+    const missingTables = criticalTables.filter(t => !tableNames.includes(t));
+    
+    if (missingTables.length > 0) {
+      console.error(`❌ Critical tables missing: ${missingTables.join(', ')}`);
+      console.error(`   Existing tables: ${tableNames.join(', ') || 'none'}`);
+      console.error(`   This indicates schema initialization had issues.`);
+      console.error(`   Please check the errors above and ensure all statements executed.`);
+    } else {
+      console.log(`✅ Critical tables verified: ${tableNames.join(', ')}`);
+    }
+
+    console.log(`✅ Database schema initialized!`);
     console.log(`   - ${successCount} statements executed`);
     if (skipCount > 0) {
       console.log(`   - ${skipCount} statements skipped (already exist)`);
     }
     if (errorCount > 0) {
-      console.log(`   - ${errorCount} statements had errors (non-critical)`);
+      console.log(`   - ⚠️  ${errorCount} statements had errors`);
+      if (missingTables.length > 0) {
+        console.log(`   - ❌ Some critical tables are missing - check errors above`);
+      }
     }
     
-    return true;
+    return missingTables.length === 0;
     
   } catch (error) {
     console.error('❌ Error initializing database:', error.message);

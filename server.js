@@ -60,16 +60,51 @@ app.get('/health', (req, res) => {
   });
 });
 
-app.get('/api/health', (req, res) => {
-  res.setHeader('Content-Type', 'application/json');
-  res.status(200).json({ 
-    status: 'ok', 
-    message: 'EduAI Platform API is running',
-    timestamp: new Date().toISOString(),
-    port: PORT,
-    environment: process.env.NODE_ENV || 'development',
-    path: req.path
-  });
+app.get('/api/health', async (req, res) => {
+  try {
+    // Check database connection and tables
+    const db = (await import('./database/db.js')).default;
+    let dbStatus = 'unknown';
+    let tablesStatus = 'unknown';
+    
+    try {
+      await db.query('SELECT 1');
+      dbStatus = 'connected';
+      
+      // Check if users table exists
+      const [tables] = await db.query(`
+        SELECT table_name 
+        FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = 'users'
+      `);
+      
+      tablesStatus = tables.length > 0 ? 'exists' : 'missing';
+    } catch (dbError) {
+      dbStatus = 'error: ' + dbError.message;
+      tablesStatus = 'unknown';
+    }
+
+    res.setHeader('Content-Type', 'application/json');
+    res.status(200).json({ 
+      status: 'ok', 
+      message: 'EduAI Platform API is running',
+      timestamp: new Date().toISOString(),
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      path: req.path,
+      database: {
+        connection: dbStatus,
+        tables: tablesStatus
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Health check failed',
+      error: error.message
+    });
+  }
 });
 
 // Debug route to see what path Node.js receives (works on any path)
