@@ -55,16 +55,14 @@ function parseSQLStatements(sql) {
       continue;
     }
 
-    // Check for comments
+    // Check for comments - but don't include them in statements
     if (char === '-' && nextChar === '-') {
-      // Skip to end of line
+      // Skip comment line entirely - don't add to current statement
       while (i < sql.length && sql[i] !== '\n') {
-        currentStatement += sql[i];
         i++;
       }
       if (i < sql.length) {
-        currentStatement += sql[i]; // include the newline
-        i++;
+        i++; // skip the newline
       }
       continue;
     }
@@ -152,8 +150,13 @@ export async function initializeDatabase() {
     console.log(`   Total statements: ${statements.length}`);
     console.log(`   Non-comment statements: ${nonCommentStatements.length}`);
     
+    // Show first 3 non-comment statements for debugging
     if (nonCommentStatements.length > 0) {
-      console.log(`   First statement: ${nonCommentStatements[0].substring(0, 80)}...`);
+      console.log(`   First 3 statements:`);
+      for (let i = 0; i < Math.min(3, nonCommentStatements.length); i++) {
+        const stmt = nonCommentStatements[i].trim();
+        console.log(`     [${i}] ${stmt.substring(0, 60)}...`);
+      }
     }
     
     let successCount = 0;
@@ -166,7 +169,16 @@ export async function initializeDatabase() {
       
       // Skip empty statements, comments, and whitespace-only statements
       if (!trimmed || trimmed.startsWith('--') || trimmed === ';' || trimmed.length === 0) {
+        if (trimmed && trimmed.startsWith('--')) {
+          // Debug: Log skipped comments
+          console.log(`   [SKIP] Comment: ${trimmed.substring(0, 40)}...`);
+        }
         continue;
+      }
+      
+      // Debug: Log what we're about to execute (first 5 statements)
+      if (i < 5) {
+        console.log(`   [${i}] Statement type: ${trimmed.substring(0, 30).toUpperCase()}...`);
       }
       
       // Remove any trailing semicolons if present (but keep the statement)
@@ -176,9 +188,12 @@ export async function initializeDatabase() {
         continue;
       }
       
-      // Debug: Log CREATE TABLE statements
-      if (cleanStatement.toUpperCase().startsWith('CREATE TABLE')) {
+      // Debug: Log CREATE TABLE and FUNCTION statements
+      const upperStatement = cleanStatement.toUpperCase();
+      if (upperStatement.startsWith('CREATE TABLE')) {
         console.log(`📝 Executing CREATE TABLE: ${cleanStatement.substring(0, 60)}...`);
+      } else if (upperStatement.startsWith('CREATE OR REPLACE FUNCTION')) {
+        console.log(`📝 Executing FUNCTION: ${cleanStatement.substring(0, 60)}...`);
       }
       
       try {
