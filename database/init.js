@@ -123,7 +123,16 @@ export async function initializeDatabase() {
     });
 
     // Test connection first
-    await pool.query('SELECT 1');
+    try {
+      const testResult = await pool.query('SELECT 1 as test');
+      console.log('✅ Database connection test successful');
+      console.log(`   Test query result: ${JSON.stringify(testResult.rows[0])}`);
+    } catch (connError) {
+      console.error('❌ Database connection test failed!');
+      console.error(`   Error: ${connError.message}`);
+      console.error(`   Code: ${connError.code}`);
+      throw connError; // Re-throw to stop initialization
+    }
 
     // Read and execute schema
     const schemaPath = path.join(__dirname, 'schema-postgresql.sql');
@@ -134,22 +143,48 @@ export async function initializeDatabase() {
     
     console.log(`📋 Parsed ${statements.length} SQL statements`);
     
-    // Debug: Log first few statements
-    if (statements.length > 0) {
-      console.log(`   First statement: ${statements[0].substring(0, 60)}...`);
+    // Debug: Log first few statements (filter out comments)
+    const nonCommentStatements = statements.filter(s => {
+      const trimmed = s.trim();
+      return trimmed && !trimmed.startsWith('--') && trimmed !== ';';
+    });
+    
+    console.log(`   Total statements: ${statements.length}`);
+    console.log(`   Non-comment statements: ${nonCommentStatements.length}`);
+    
+    if (nonCommentStatements.length > 0) {
+      console.log(`   First statement: ${nonCommentStatements[0].substring(0, 80)}...`);
     }
     
     let successCount = 0;
     let skipCount = 0;
     let errorCount = 0;
 
-    for (const statement of statements) {
+    for (let i = 0; i < statements.length; i++) {
+      const statement = statements[i];
       const trimmed = statement.trim();
-      if (trimmed && !trimmed.startsWith('--')) {
-        try {
-          await pool.query(trimmed);
-          successCount++;
-        } catch (error) {
+      
+      // Skip empty statements, comments, and whitespace-only statements
+      if (!trimmed || trimmed.startsWith('--') || trimmed === ';' || trimmed.length === 0) {
+        continue;
+      }
+      
+      // Remove any trailing semicolons if present (but keep the statement)
+      const cleanStatement = trimmed.endsWith(';') ? trimmed.slice(0, -1).trim() : trimmed;
+      
+      if (!cleanStatement || cleanStatement.length === 0) {
+        continue;
+      }
+      
+      // Debug: Log CREATE TABLE statements
+      if (cleanStatement.toUpperCase().startsWith('CREATE TABLE')) {
+        console.log(`📝 Executing CREATE TABLE: ${cleanStatement.substring(0, 60)}...`);
+      }
+      
+      try {
+        await pool.query(cleanStatement);
+        successCount++;
+      } catch (error) {
           // Ignore "already exists" errors (idempotent)
           if (error.message.includes('already exists') || 
               error.message.includes('duplicate') ||
@@ -172,7 +207,6 @@ export async function initializeDatabase() {
           }
         }
       }
-    }
 
     // Verify critical tables were created
     try {
@@ -195,9 +229,12 @@ export async function initializeDatabase() {
       } else {
         console.log(`✅ Critical tables verified: ${tableNames.join(', ')}`);
       }
+      // Store missingTables for later use
+      var hasMissingTables = missingTables.length > 0;
     } catch (verifyError) {
       console.error(`❌ Error verifying tables: ${verifyError.message}`);
       console.error(`   This might indicate a database connection or query issue.`);
+      var hasMissingTables = true; // Assume missing if we can't verify
     }
 
     console.log(`✅ Database schema initialized!`);
@@ -207,12 +244,15 @@ export async function initializeDatabase() {
     }
     if (errorCount > 0) {
       console.log(`   - ⚠️  ${errorCount} statements had errors`);
-      if (missingTables.length > 0) {
-        console.log(`   - ❌ Some critical tables are missing - check errors above`);
-      }
     }
     
-    return missingTables.length === 0;
+    // Check if we have missing tables (if verification succeeded)
+    if (typeof hasMissingTables !== 'undefined' && hasMissingTables) {
+      console.log(`   - ❌ Some critical tables are missing - check errors above`);
+      return false;
+    }
+    
+    return successCount > 0 && errorCount === 0;
     
   } catch (error) {
     console.error('❌ Error initializing database:', error.message);
