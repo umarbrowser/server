@@ -186,3 +186,4 @@ CREATE TABLE IF NOT EXISTS study_sessions (
   INDEX idx_created (created_at)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+
