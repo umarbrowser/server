@@ -10,16 +10,16 @@ router.get('/', authenticateToken, async (req, res) => {
   try {
     const { courseId, due } = req.query;
 
-    let query = 'SELECT * FROM flashcards WHERE user_id = ?';
+    let query = 'SELECT * FROM flashcards WHERE user_id = $1';
     const params = [req.user.userId];
 
     if (courseId) {
-      query += ' AND course_id = ?';
+      query += ' AND course_id = $2';
       params.push(courseId);
     }
 
     if (due === 'true') {
-      query += ' AND (next_review IS NULL OR next_review <= NOW())';
+      query += ' AND (next_review IS NULL OR next_review <= CURRENT_TIMESTAMP)';
     }
 
     query += ' ORDER BY next_review ASC, created_at DESC';
@@ -42,11 +42,12 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const [result] = await db.query(
-      'INSERT INTO flashcards (user_id, course_id, front_text, back_text, next_review) VALUES (?, ?, ?, ?, NOW())',
+      'INSERT INTO flashcards (user_id, course_id, front_text, back_text, next_review) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING id',
       [req.user.userId, course_id || null, front_text, back_text]
     );
 
-    const [flashcards] = await db.query('SELECT * FROM flashcards WHERE id = ?', [result.insertId]);
+    const flashcardId = result[0].id;
+    const [flashcards] = await db.query('SELECT * FROM flashcards WHERE id = $1', [flashcardId]);
     res.status(201).json({ flashcard: flashcards[0] });
   } catch (error) {
     console.error('Create flashcard error:', error);
@@ -69,10 +70,11 @@ router.post('/generate', authenticateToken, async (req, res) => {
     const savedFlashcards = [];
     for (const card of flashcards) {
       const [result] = await db.query(
-        'INSERT INTO flashcards (user_id, course_id, front_text, back_text, next_review) VALUES (?, ?, ?, ?, NOW())',
+        'INSERT INTO flashcards (user_id, course_id, front_text, back_text, next_review) VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP) RETURNING id',
         [req.user.userId, courseId || null, card.front, card.back]
       );
-      const [newCards] = await db.query('SELECT * FROM flashcards WHERE id = ?', [result.insertId]);
+      const flashcardId = result[0].id;
+      const [newCards] = await db.query('SELECT * FROM flashcards WHERE id = $1', [flashcardId]);
       savedFlashcards.push(newCards[0]);
     }
 
@@ -91,7 +93,7 @@ router.post('/:id/review', authenticateToken, async (req, res) => {
 
     // Get flashcard
     const [flashcards] = await db.query(
-      'SELECT * FROM flashcards WHERE id = ? AND user_id = ?',
+      'SELECT * FROM flashcards WHERE id = $1 AND user_id = $2',
       [flashcardId, req.user.userId]
     );
 
@@ -127,13 +129,13 @@ router.post('/:id/review', authenticateToken, async (req, res) => {
 
     // Update flashcard
     await db.query(
-      'UPDATE flashcards SET difficulty_level = ?, review_count = ?, last_reviewed = NOW(), next_review = ? WHERE id = ?',
+      'UPDATE flashcards SET difficulty_level = $1, review_count = $2, last_reviewed = CURRENT_TIMESTAMP, next_review = $3 WHERE id = $4',
       [difficultyLevel, reviewCount, nextReview, flashcardId]
     );
 
     // Award points
     const pointsEarned = difficulty === 1 ? 3 : difficulty === 2 ? 2 : 1;
-    await db.query('UPDATE users SET points = points + ? WHERE id = ?', [pointsEarned, req.user.userId]);
+    await db.query('UPDATE users SET points = points + $1 WHERE id = $2', [pointsEarned, req.user.userId]);
 
     res.json({
       message: 'Review recorded',
@@ -158,7 +160,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // Verify ownership
     const [flashcards] = await db.query(
-      'SELECT * FROM flashcards WHERE id = ? AND user_id = ?',
+      'SELECT * FROM flashcards WHERE id = $1 AND user_id = $2',
       [flashcardId, req.user.userId]
     );
 
@@ -168,11 +170,11 @@ router.put('/:id', authenticateToken, async (req, res) => {
 
     // Update flashcard
     await db.query(
-      'UPDATE flashcards SET front_text = ?, back_text = ? WHERE id = ?',
+      'UPDATE flashcards SET front_text = $1, back_text = $2 WHERE id = $3',
       [front_text, back_text, flashcardId]
     );
 
-    const [updated] = await db.query('SELECT * FROM flashcards WHERE id = ?', [flashcardId]);
+    const [updated] = await db.query('SELECT * FROM flashcards WHERE id = $1', [flashcardId]);
     res.json({ flashcard: updated[0] });
   } catch (error) {
     console.error('Update flashcard error:', error);
@@ -185,7 +187,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const flashcardId = parseInt(req.params.id);
 
-    await db.query('DELETE FROM flashcards WHERE id = ? AND user_id = ?', [flashcardId, req.user.userId]);
+    await db.query('DELETE FROM flashcards WHERE id = $1 AND user_id = $2', [flashcardId, req.user.userId]);
     res.json({ message: 'Flashcard deleted' });
   } catch (error) {
     console.error('Delete flashcard error:', error);
@@ -194,4 +196,3 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 export default router;
-

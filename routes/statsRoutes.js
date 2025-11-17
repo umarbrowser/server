@@ -11,31 +11,31 @@ router.get('/user', authenticateToken, async (req, res) => {
 
     // Get user info
     const [users] = await db.query(
-      'SELECT points, level FROM users WHERE id = ?',
+      'SELECT points, level FROM users WHERE id = $1',
       [userId]
     );
 
     // Get enrollment count
     const [enrollments] = await db.query(
-      'SELECT COUNT(*) as total, SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) as completed FROM enrollments WHERE user_id = ?',
+      'SELECT COUNT(*) as total, SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) as completed FROM enrollments WHERE user_id = $1',
       [userId]
     );
 
     // Get study sessions stats
     const [sessions] = await db.query(
-      'SELECT COUNT(*) as total_sessions, SUM(duration_minutes) as total_minutes, SUM(points_earned) as total_points FROM study_sessions WHERE user_id = ?',
+      'SELECT COUNT(*) as total_sessions, SUM(duration_minutes) as total_minutes, SUM(points_earned) as total_points FROM study_sessions WHERE user_id = $1',
       [userId]
     );
 
     // Get flashcards stats
     const [flashcards] = await db.query(
-      'SELECT COUNT(*) as total, SUM(CASE WHEN next_review <= NOW() OR next_review IS NULL THEN 1 ELSE 0 END) as due FROM flashcards WHERE user_id = ?',
+      'SELECT COUNT(*) as total, SUM(CASE WHEN next_review <= CURRENT_TIMESTAMP OR next_review IS NULL THEN 1 ELSE 0 END) as due FROM flashcards WHERE user_id = $1',
       [userId]
     );
 
     // Get quiz attempts
     const [quizzes] = await db.query(
-      'SELECT COUNT(*) as total_attempts, AVG(score) as avg_score FROM quiz_attempts WHERE user_id = ?',
+      'SELECT COUNT(*) as total_attempts, AVG(score) as avg_score FROM quiz_attempts WHERE user_id = $1',
       [userId]
     );
 
@@ -47,7 +47,7 @@ router.get('/user', authenticateToken, async (req, res) => {
         points_earned,
         created_at
       FROM study_sessions
-      WHERE user_id = ?
+      WHERE user_id = $1
       ORDER BY created_at DESC
       LIMIT 10`,
       [userId]
@@ -134,7 +134,7 @@ router.get('/leaderboard', async (req, res) => {
   try {
     const { limit = 50 } = req.query;
 
-    // Get all users with their ranks using a subquery approach (compatible with older MySQL)
+    // Get all users with their ranks using PostgreSQL window functions
     const [rankedUsers] = await db.query(`
       SELECT 
         u.id,
@@ -147,22 +147,21 @@ router.get('/leaderboard', async (req, res) => {
         u.state,
         u.country,
         u.bio,
-        @rank := @rank + 1 as rank_pos
+        ROW_NUMBER() OVER (ORDER BY u.points DESC, u.level DESC) as rank_pos
       FROM users u
-      CROSS JOIN (SELECT @rank := 0) r
       ORDER BY u.points DESC, u.level DESC
     `);
 
-    // Update or insert into leaderboard
+    // Update or insert into leaderboard (PostgreSQL uses ON CONFLICT instead of ON DUPLICATE KEY UPDATE)
     for (const user of rankedUsers) {
       await db.query(`
         INSERT INTO leaderboard (user_id, username, points, level, rank_position)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-          username = VALUES(username),
-          points = VALUES(points),
-          level = VALUES(level),
-          rank_position = VALUES(rank_position)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id) DO UPDATE SET
+          username = EXCLUDED.username,
+          points = EXCLUDED.points,
+          level = EXCLUDED.level,
+          rank_position = EXCLUDED.rank_position
       `, [user.id, user.username, user.points, user.level, user.rank_pos]);
     }
 
@@ -179,7 +178,7 @@ router.get('/leaderboard', async (req, res) => {
       FROM leaderboard l
       JOIN users u ON l.user_id = u.id
       ORDER BY l.rank_position ASC
-      LIMIT ?
+      LIMIT $1
     `, [parseInt(limit)]);
 
     res.json({ leaderboard: leaderboardWithInfo });
@@ -192,4 +191,3 @@ router.get('/leaderboard', async (req, res) => {
 });
 
 export default router;
-

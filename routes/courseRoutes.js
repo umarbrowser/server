@@ -10,7 +10,7 @@ router.get('/', optionalAuth, async (req, res) => {
   try {
     // Show published courses to everyone, or unpublished courses to their creator
     const whereClause = req.user 
-      ? 'WHERE c.is_published = TRUE OR c.instructor_id = ?'
+      ? 'WHERE c.is_published = TRUE OR c.instructor_id = $1'
       : 'WHERE c.is_published = TRUE';
     
     let query = `
@@ -34,8 +34,9 @@ router.get('/', optionalAuth, async (req, res) => {
     if (req.user) {
       const courseIds = courses.map(c => c.id);
       if (courseIds.length > 0) {
+        // PostgreSQL uses ANY(array) for IN clause
         const [enrollments] = await db.query(
-          'SELECT course_id, progress_percentage FROM enrollments WHERE user_id = ? AND course_id IN (?)',
+          'SELECT course_id, progress_percentage FROM enrollments WHERE user_id = $1 AND course_id = ANY($2::int[])',
           [req.user.userId, courseIds]
         );
         
@@ -68,7 +69,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
       `SELECT c.*, u.username as instructor_name, u.full_name as instructor_full_name
        FROM courses c
        LEFT JOIN users u ON c.instructor_id = u.id
-       WHERE c.id = ?`,
+       WHERE c.id = $1`,
       [courseId]
     );
 
@@ -80,7 +81,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 
     // Get modules
     const [modules] = await db.query(
-      'SELECT * FROM course_modules WHERE course_id = ? ORDER BY order_index ASC',
+      'SELECT * FROM course_modules WHERE course_id = $1 ORDER BY order_index ASC',
       [courseId]
     );
 
@@ -89,7 +90,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
     // Get enrollment status if authenticated
     if (req.user) {
       const [enrollments] = await db.query(
-        'SELECT * FROM enrollments WHERE user_id = ? AND course_id = ?',
+        'SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2',
         [req.user.userId, courseId]
       );
       course.is_enrolled = enrollments.length > 0;
@@ -114,11 +115,12 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const [result] = await db.query(
-      'INSERT INTO courses (instructor_id, title, description, category, difficulty, thumbnail_url, is_published) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO courses (instructor_id, title, description, category, difficulty, thumbnail_url, is_published) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id',
       [req.user.userId, title, description || null, category || null, difficulty || 'beginner', thumbnail_url || null, true]
     );
 
-    const [courses] = await db.query('SELECT * FROM courses WHERE id = ?', [result.insertId]);
+    const courseId = result[0].id;
+    const [courses] = await db.query('SELECT * FROM courses WHERE id = $1', [courseId]);
     res.status(201).json({ course: courses[0] });
   } catch (error) {
     console.error('Create course error:', error);
@@ -172,7 +174,7 @@ router.post('/:id/modules', authenticateToken, async (req, res) => {
 
     // Verify course ownership
     const [courses] = await db.query(
-      'SELECT instructor_id FROM courses WHERE id = ?',
+      'SELECT instructor_id FROM courses WHERE id = $1',
       [courseId]
     );
 
@@ -185,11 +187,12 @@ router.post('/:id/modules', authenticateToken, async (req, res) => {
     }
 
     const [result] = await db.query(
-      'INSERT INTO course_modules (course_id, title, content, video_url, duration_minutes, order_index) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO course_modules (course_id, title, content, video_url, duration_minutes, order_index) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
       [courseId, title, content || null, video_url || null, duration_minutes || null, order_index || 0]
     );
 
-    const [modules] = await db.query('SELECT * FROM course_modules WHERE id = ?', [result.insertId]);
+    const moduleId = result[0].id;
+    const [modules] = await db.query('SELECT * FROM course_modules WHERE id = $1', [moduleId]);
     res.status(201).json({ module: modules[0] });
   } catch (error) {
     console.error('Add module error:', error);
@@ -211,7 +214,7 @@ router.post('/:id/modules/generate', authenticateToken, async (req, res) => {
     if (courseId !== 0) {
       // Verify course ownership
       const [courses] = await db.query(
-        'SELECT instructor_id FROM courses WHERE id = ?',
+        'SELECT instructor_id FROM courses WHERE id = $1',
         [courseId]
       );
 
@@ -250,7 +253,7 @@ router.post('/:id/enroll', authenticateToken, async (req, res) => {
 
     // Check if already enrolled
     const [existing] = await db.query(
-      'SELECT * FROM enrollments WHERE user_id = ? AND course_id = ?',
+      'SELECT * FROM enrollments WHERE user_id = $1 AND course_id = $2',
       [req.user.userId, courseId]
     );
 
@@ -259,12 +262,12 @@ router.post('/:id/enroll', authenticateToken, async (req, res) => {
     }
 
     await db.query(
-      'INSERT INTO enrollments (user_id, course_id) VALUES (?, ?)',
+      'INSERT INTO enrollments (user_id, course_id) VALUES ($1, $2)',
       [req.user.userId, courseId]
     );
 
     // Award points for enrollment
-    await db.query('UPDATE users SET points = points + 10 WHERE id = ?', [req.user.userId]);
+    await db.query('UPDATE users SET points = points + 10 WHERE id = $1', [req.user.userId]);
 
     res.json({ message: 'Successfully enrolled in course' });
   } catch (error) {
@@ -280,18 +283,18 @@ router.put('/:id/progress', authenticateToken, async (req, res) => {
     const { progress_percentage } = req.body;
 
     await db.query(
-      'UPDATE enrollments SET progress_percentage = ? WHERE user_id = ? AND course_id = ?',
+      'UPDATE enrollments SET progress_percentage = $1 WHERE user_id = $2 AND course_id = $3',
       [progress_percentage, req.user.userId, courseId]
     );
 
     // If completed, mark as completed
     if (progress_percentage >= 100) {
       await db.query(
-        'UPDATE enrollments SET completed_at = CURRENT_TIMESTAMP WHERE user_id = ? AND course_id = ?',
+        'UPDATE enrollments SET completed_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND course_id = $2',
         [req.user.userId, courseId]
       );
       // Award completion points
-      await db.query('UPDATE users SET points = points + 50 WHERE id = ?', [req.user.userId]);
+      await db.query('UPDATE users SET points = points + 50 WHERE id = $1', [req.user.userId]);
     }
 
     res.json({ message: 'Progress updated' });
@@ -314,7 +317,7 @@ router.get('/user/my-courses', authenticateToken, async (req, res) => {
       FROM enrollments e
       JOIN courses c ON e.course_id = c.id
       LEFT JOIN users u ON c.instructor_id = u.id
-      WHERE e.user_id = ?
+      WHERE e.user_id = $1
       ORDER BY e.enrolled_at DESC`,
       [req.user.userId]
     );
@@ -333,7 +336,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 
     // Verify course ownership
     const [courses] = await db.query(
-      'SELECT instructor_id FROM courses WHERE id = ?',
+      'SELECT instructor_id FROM courses WHERE id = $1',
       [courseId]
     );
 
@@ -346,7 +349,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     }
 
     // Delete course (cascade will handle modules and enrollments)
-    await db.query('DELETE FROM courses WHERE id = ?', [courseId]);
+    await db.query('DELETE FROM courses WHERE id = $1', [courseId]);
 
     res.json({ message: 'Course deleted successfully' });
   } catch (error) {
@@ -356,4 +359,3 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 export default router;
-

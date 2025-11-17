@@ -10,11 +10,11 @@ router.get('/conversations', authenticateToken, async (req, res) => {
   try {
     const { courseId } = req.query;
 
-    let query = 'SELECT * FROM ai_conversations WHERE user_id = ?';
+    let query = 'SELECT * FROM ai_conversations WHERE user_id = $1';
     const params = [req.user.userId];
 
     if (courseId) {
-      query += ' AND course_id = ?';
+      query += ' AND course_id = $2';
       params.push(courseId);
     }
 
@@ -34,11 +34,12 @@ router.post('/conversations', authenticateToken, async (req, res) => {
     const { title, courseId } = req.body;
 
     const [result] = await db.query(
-      'INSERT INTO ai_conversations (user_id, course_id, title) VALUES (?, ?, ?)',
+      'INSERT INTO ai_conversations (user_id, course_id, title) VALUES ($1, $2, $3) RETURNING id',
       [req.user.userId, courseId || null, title || 'New Conversation']
     );
 
-    const [conversations] = await db.query('SELECT * FROM ai_conversations WHERE id = ?', [result.insertId]);
+    const conversationId = result[0].id;
+    const [conversations] = await db.query('SELECT * FROM ai_conversations WHERE id = $1', [conversationId]);
     res.status(201).json({ conversation: conversations[0] });
   } catch (error) {
     console.error('Create conversation error:', error);
@@ -53,7 +54,7 @@ router.get('/conversations/:id/messages', authenticateToken, async (req, res) =>
 
     // Verify ownership
     const [conversations] = await db.query(
-      'SELECT * FROM ai_conversations WHERE id = ? AND user_id = ?',
+      'SELECT * FROM ai_conversations WHERE id = $1 AND user_id = $2',
       [conversationId, req.user.userId]
     );
 
@@ -62,7 +63,7 @@ router.get('/conversations/:id/messages', authenticateToken, async (req, res) =>
     }
 
     const [messages] = await db.query(
-      'SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      'SELECT * FROM ai_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
       [conversationId]
     );
 
@@ -85,7 +86,7 @@ router.post('/conversations/:id/messages', authenticateToken, async (req, res) =
 
     // Verify ownership and get conversation
     const [conversations] = await db.query(
-      'SELECT * FROM ai_conversations WHERE id = ? AND user_id = ?',
+      'SELECT * FROM ai_conversations WHERE id = $1 AND user_id = $2',
       [conversationId, req.user.userId]
     );
 
@@ -98,7 +99,7 @@ router.post('/conversations/:id/messages', authenticateToken, async (req, res) =
     // Get course context if available
     let courseContext = null;
     if (conversation.course_id) {
-      const [courses] = await db.query('SELECT title FROM courses WHERE id = ?', [conversation.course_id]);
+      const [courses] = await db.query('SELECT title FROM courses WHERE id = $1', [conversation.course_id]);
       if (courses.length > 0) {
         courseContext = courses[0].title;
       }
@@ -106,7 +107,7 @@ router.post('/conversations/:id/messages', authenticateToken, async (req, res) =
 
     // Get conversation history
     const [historyMessages] = await db.query(
-      'SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      'SELECT role, content FROM ai_messages WHERE conversation_id = $1 ORDER BY created_at ASC',
       [conversationId]
     );
 
@@ -117,7 +118,7 @@ router.post('/conversations/:id/messages', authenticateToken, async (req, res) =
 
     // Save user message
     await db.query(
-      'INSERT INTO ai_messages (conversation_id, role, content) VALUES (?, ?, ?)',
+      'INSERT INTO ai_messages (conversation_id, role, content) VALUES ($1, $2, $3)',
       [conversationId, 'user', content]
     );
 
@@ -126,18 +127,18 @@ router.post('/conversations/:id/messages', authenticateToken, async (req, res) =
 
     // Save AI response
     await db.query(
-      'INSERT INTO ai_messages (conversation_id, role, content) VALUES (?, ?, ?)',
+      'INSERT INTO ai_messages (conversation_id, role, content) VALUES ($1, $2, $3)',
       [conversationId, 'assistant', aiResponse]
     );
 
     // Update conversation timestamp
     await db.query(
-      'UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      'UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = $1',
       [conversationId]
     );
 
     // Award points for using AI assistant
-    await db.query('UPDATE users SET points = points + 1 WHERE id = ?', [req.user.userId]);
+    await db.query('UPDATE users SET points = points + 1 WHERE id = $1', [req.user.userId]);
 
     res.json({
       userMessage: { role: 'user', content },
@@ -156,7 +157,7 @@ router.delete('/conversations/:id', authenticateToken, async (req, res) => {
 
     // Verify ownership
     const [conversations] = await db.query(
-      'SELECT * FROM ai_conversations WHERE id = ? AND user_id = ?',
+      'SELECT * FROM ai_conversations WHERE id = $1 AND user_id = $2',
       [conversationId, req.user.userId]
     );
 
@@ -165,7 +166,7 @@ router.delete('/conversations/:id', authenticateToken, async (req, res) => {
     }
 
     // Delete conversation (cascade will handle messages)
-    await db.query('DELETE FROM ai_conversations WHERE id = ?', [conversationId]);
+    await db.query('DELETE FROM ai_conversations WHERE id = $1', [conversationId]);
 
     res.json({ message: 'Conversation deleted successfully' });
   } catch (error) {
@@ -175,4 +176,3 @@ router.delete('/conversations/:id', authenticateToken, async (req, res) => {
 });
 
 export default router;
-

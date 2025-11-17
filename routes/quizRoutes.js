@@ -19,7 +19,7 @@ router.get('/', optionalAuth, async (req, res) => {
     const params = [];
 
     if (courseId) {
-      query += ' AND q.course_id = ?';
+      query += ' AND q.course_id = $1';
       params.push(courseId);
     }
 
@@ -38,13 +38,13 @@ router.get('/:id', authenticateToken, async (req, res) => {
   try {
     const quizId = parseInt(req.params.id);
 
-    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = ?', [quizId]);
+    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = $1', [quizId]);
     if (quizzes.length === 0) {
       return res.status(404).json({ error: 'Quiz not found' });
     }
 
     const [questions] = await db.query(
-      'SELECT id, question_text, question_type, options, points, order_index FROM quiz_questions WHERE quiz_id = ? ORDER BY order_index ASC',
+      'SELECT id, question_text, question_type, options, points, order_index FROM quiz_questions WHERE quiz_id = $1 ORDER BY order_index ASC',
       [quizId]
     );
 
@@ -69,11 +69,12 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 
     const [result] = await db.query(
-      'INSERT INTO quizzes (course_id, title, description, time_limit_minutes) VALUES (?, ?, ?, ?)',
+      'INSERT INTO quizzes (course_id, title, description, time_limit_minutes) VALUES ($1, $2, $3, $4) RETURNING id',
       [course_id || null, title, description || null, time_limit_minutes || null]
     );
 
-    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = ?', [result.insertId]);
+    const quizId = result[0].id;
+    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = $1', [quizId]);
     res.status(201).json({ quiz: quizzes[0] });
   } catch (error) {
     console.error('Create quiz error:', error);
@@ -94,17 +95,17 @@ router.post('/generate', authenticateToken, async (req, res) => {
 
     // Create quiz
     const [quizResult] = await db.query(
-      'INSERT INTO quizzes (course_id, title, description, time_limit_minutes, total_questions) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO quizzes (course_id, title, description, time_limit_minutes, total_questions) VALUES ($1, $2, $3, $4, $5) RETURNING id',
       [courseId || null, `Quiz: ${topic}`, `AI-generated quiz about ${topic}`, timeLimit || null, questions.length]
     );
 
-    const quizId = quizResult.insertId;
+    const quizId = quizResult[0].id;
 
     // Add questions
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       await db.query(
-        'INSERT INTO quiz_questions (quiz_id, question_text, question_type, options, correct_answer, points, order_index) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO quiz_questions (quiz_id, question_text, question_type, options, correct_answer, points, order_index) VALUES ($1, $2, $3, $4, $5, $6, $7)',
         [
           quizId,
           q.question,
@@ -117,7 +118,7 @@ router.post('/generate', authenticateToken, async (req, res) => {
       );
     }
 
-    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = ?', [quizId]);
+    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = $1', [quizId]);
     res.status(201).json({ quiz: quizzes[0] });
   } catch (error) {
     console.error('Generate quiz error:', error);
@@ -132,13 +133,13 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
     const { answers, timeTakenSeconds } = req.body;
 
     // Get quiz with correct answers
-    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = ?', [quizId]);
+    const [quizzes] = await db.query('SELECT * FROM quizzes WHERE id = $1', [quizId]);
     if (quizzes.length === 0) {
       return res.status(404).json({ error: 'Quiz not found' });
     }
 
     const [questions] = await db.query(
-      'SELECT id, correct_answer, points FROM quiz_questions WHERE quiz_id = ? ORDER BY order_index ASC',
+      'SELECT id, correct_answer, points FROM quiz_questions WHERE quiz_id = $1 ORDER BY order_index ASC',
       [quizId]
     );
 
@@ -169,17 +170,17 @@ router.post('/:id/submit', authenticateToken, async (req, res) => {
 
     // Save attempt
     await db.query(
-      'INSERT INTO quiz_attempts (user_id, quiz_id, score, total_questions, correct_answers, time_taken_seconds) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO quiz_attempts (user_id, quiz_id, score, total_questions, correct_answers, time_taken_seconds) VALUES ($1, $2, $3, $4, $5, $6)',
       [req.user.userId, quizId, score, questions.length, correctAnswers, timeTakenSeconds || 0]
     );
 
     // Award points based on score
     const pointsEarned = Math.floor(score / 10); // 10 points per 10% score
-    await db.query('UPDATE users SET points = points + ? WHERE id = ?', [pointsEarned, req.user.userId]);
+    await db.query('UPDATE users SET points = points + $1 WHERE id = $2', [pointsEarned, req.user.userId]);
 
     // Record study session
     await db.query(
-      'INSERT INTO study_sessions (user_id, course_id, session_type, duration_minutes, points_earned) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO study_sessions (user_id, course_id, session_type, duration_minutes, points_earned) VALUES ($1, $2, $3, $4, $5)',
       [req.user.userId, quizzes[0].course_id, 'quiz', Math.ceil((timeTakenSeconds || 0) / 60), pointsEarned]
     );
 
@@ -208,7 +209,7 @@ router.get('/user/attempts', authenticateToken, async (req, res) => {
       FROM quiz_attempts qa
       JOIN quizzes q ON qa.quiz_id = q.id
       LEFT JOIN courses c ON q.course_id = c.id
-      WHERE qa.user_id = ?
+      WHERE qa.user_id = $1
       ORDER BY qa.completed_at DESC`,
       [req.user.userId]
     );
@@ -230,7 +231,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
       `SELECT q.*, c.instructor_id 
        FROM quizzes q 
        LEFT JOIN courses c ON q.course_id = c.id 
-       WHERE q.id = ?`,
+       WHERE q.id = $1`,
       [quizId]
     );
 
@@ -246,7 +247,7 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     }
 
     // Delete quiz (cascade will handle questions and attempts)
-    await db.query('DELETE FROM quizzes WHERE id = ?', [quizId]);
+    await db.query('DELETE FROM quizzes WHERE id = $1', [quizId]);
 
     res.json({ message: 'Quiz deleted successfully' });
   } catch (error) {
@@ -256,4 +257,3 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 export default router;
-

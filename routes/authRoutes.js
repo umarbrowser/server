@@ -34,7 +34,7 @@ router.post('/register', async (req, res) => {
 
     // Check if user exists
     const [existingUsers] = await db.query(
-      'SELECT id FROM users WHERE email = ? OR username = ?',
+      'SELECT id FROM users WHERE email = $1 OR username = $2',
       [email, username]
     );
 
@@ -45,23 +45,25 @@ router.post('/register', async (req, res) => {
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create user
+    // Create user with RETURNING to get the ID
     const [result] = await db.query(
-      'INSERT INTO users (username, email, password, full_name) VALUES (?, ?, ?, ?)',
+      'INSERT INTO users (username, email, password, full_name) VALUES ($1, $2, $3, $4) RETURNING id',
       [username, email, hashedPassword, fullName || null]
     );
 
+    const userId = result[0].id;
+
     // Generate JWT
     const token = jwt.sign(
-      { userId: result.insertId, username, email },
+      { userId, username, email },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
     // Get created user
     const [users] = await db.query(
-      'SELECT id, username, email, full_name, role, points, level FROM users WHERE id = ?',
-      [result.insertId]
+      'SELECT id, username, email, full_name, role, points, level FROM users WHERE id = $1',
+      [userId]
     );
 
     res.status(201).json({
@@ -73,22 +75,22 @@ router.post('/register', async (req, res) => {
     console.error('Registration error:', error);
     console.error('Error stack:', error.stack);
     
-    // Provide more specific error messages
-    if (error.code === 'ER_NO_SUCH_TABLE') {
+    // Provide more specific error messages (PostgreSQL error codes)
+    if (error.code === '42P01') { // undefined_table
       return res.status(500).json({ 
         error: 'Database table not found. Please run database setup.',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
     
-    if (error.code === 'ER_ACCESS_DENIED_ERROR' || error.code === 'ER_BAD_DB_ERROR') {
+    if (error.code === '28000' || error.code === '28P01') { // invalid_authorization_specification
       return res.status(500).json({ 
         error: 'Database access denied. Please check database credentials.',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
 
-    if (error.code === 'ECONNREFUSED') {
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
       return res.status(500).json({ 
         error: 'Cannot connect to database server. Please check database configuration.',
         details: process.env.NODE_ENV === 'development' ? error.message : undefined
@@ -113,7 +115,7 @@ router.post('/login', async (req, res) => {
 
     // Find user
     const [users] = await db.query(
-      'SELECT * FROM users WHERE email = ?',
+      'SELECT * FROM users WHERE email = $1',
       [email]
     );
 
@@ -161,7 +163,7 @@ router.get('/me', authenticateToken, async (req, res) => {
     const [users] = await db.query(
       `SELECT id, username, email, full_name, role, points, level, avatar_url, 
        school, state, country, bio, phone, date_of_birth, website, created_at 
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [req.user.userId]
     );
 
@@ -194,41 +196,42 @@ router.put('/profile', authenticateToken, async (req, res) => {
     // Build update query dynamically
     const updates = [];
     const values = [];
+    let paramIndex = 1;
 
     if (full_name !== undefined) {
-      updates.push('full_name = ?');
+      updates.push(`full_name = $${paramIndex++}`);
       values.push(full_name);
     }
     if (school !== undefined) {
-      updates.push('school = ?');
+      updates.push(`school = $${paramIndex++}`);
       values.push(school);
     }
     if (state !== undefined) {
-      updates.push('state = ?');
+      updates.push(`state = $${paramIndex++}`);
       values.push(state);
     }
     if (country !== undefined) {
-      updates.push('country = ?');
+      updates.push(`country = $${paramIndex++}`);
       values.push(country);
     }
     if (bio !== undefined) {
-      updates.push('bio = ?');
+      updates.push(`bio = $${paramIndex++}`);
       values.push(bio);
     }
     if (phone !== undefined) {
-      updates.push('phone = ?');
+      updates.push(`phone = $${paramIndex++}`);
       values.push(phone);
     }
     if (date_of_birth !== undefined) {
-      updates.push('date_of_birth = ?');
+      updates.push(`date_of_birth = $${paramIndex++}`);
       values.push(date_of_birth);
     }
     if (website !== undefined) {
-      updates.push('website = ?');
+      updates.push(`website = $${paramIndex++}`);
       values.push(website);
     }
     if (avatar_url !== undefined) {
-      updates.push('avatar_url = ?');
+      updates.push(`avatar_url = $${paramIndex++}`);
       values.push(avatar_url);
     }
 
@@ -239,7 +242,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     values.push(req.user.userId);
 
     await db.query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
       values
     );
 
@@ -247,7 +250,7 @@ router.put('/profile', authenticateToken, async (req, res) => {
     const [users] = await db.query(
       `SELECT id, username, email, full_name, role, points, level, avatar_url, 
        school, state, country, bio, phone, date_of_birth, website, created_at 
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [req.user.userId]
     );
 
