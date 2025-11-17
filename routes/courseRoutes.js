@@ -23,7 +23,7 @@ router.get('/', optionalAuth, async (req, res) => {
       LEFT JOIN users u ON c.instructor_id = u.id
       LEFT JOIN enrollments e ON c.id = e.course_id
       ${whereClause}
-      GROUP BY c.id
+      GROUP BY c.id, u.username, u.full_name
       ORDER BY c.created_at DESC
     `;
 

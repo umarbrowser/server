@@ -243,6 +243,52 @@ export async function initializeDatabase() {
         console.error(`   Please check the errors above and ensure all statements executed.`);
       } else {
         console.log(`✅ Critical tables verified: ${tableNames.join(', ')}`);
+        
+        // Check if users table has profile columns, add them if missing
+        try {
+          const [columns] = await pool.query(`
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_schema = 'public' 
+            AND table_name = 'users'
+            AND column_name IN ('school', 'state', 'country', 'bio', 'phone', 'date_of_birth', 'website')
+          `);
+          
+          const existingColumns = columns.map(c => c.column_name);
+          const requiredColumns = ['school', 'state', 'country', 'bio', 'phone', 'date_of_birth', 'website'];
+          const missingColumns = requiredColumns.filter(col => !existingColumns.includes(col));
+          
+          if (missingColumns.length > 0) {
+            console.log(`📝 Adding missing profile columns to users table: ${missingColumns.join(', ')}`);
+            
+            // Add missing columns
+            if (missingColumns.includes('school')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS school VARCHAR(255)');
+            }
+            if (missingColumns.includes('state')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS state VARCHAR(100)');
+            }
+            if (missingColumns.includes('country')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS country VARCHAR(100)');
+            }
+            if (missingColumns.includes('bio')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT');
+            }
+            if (missingColumns.includes('phone')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)');
+            }
+            if (missingColumns.includes('date_of_birth')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_birth DATE');
+            }
+            if (missingColumns.includes('website')) {
+              await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS website VARCHAR(255)');
+            }
+            
+            console.log(`✅ Added missing profile columns`);
+          }
+        } catch (columnError) {
+          console.warn(`⚠️  Could not check/add profile columns: ${columnError.message}`);
+        }
       }
       // Store missingTables for later use
       var hasMissingTables = missingTables.length > 0;

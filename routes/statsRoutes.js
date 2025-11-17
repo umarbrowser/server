@@ -152,41 +152,90 @@ router.get('/leaderboard', async (req, res) => {
       ORDER BY u.points DESC, u.level DESC
     `);
 
-    // Update or insert into leaderboard (PostgreSQL uses ON CONFLICT instead of ON DUPLICATE KEY UPDATE)
-    for (const user of rankedUsers) {
-      await db.query(`
-        INSERT INTO leaderboard (user_id, username, points, level, rank_position)
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT (user_id) DO UPDATE SET
-          username = EXCLUDED.username,
-          points = EXCLUDED.points,
-          level = EXCLUDED.level,
-          rank_position = EXCLUDED.rank_position
-      `, [user.id, user.username, user.points, user.level, user.rank_pos]);
+    // If no users, return empty leaderboard
+    if (!rankedUsers || rankedUsers.length === 0) {
+      return res.json({ leaderboard: [] });
     }
 
-    // Get leaderboard with full user info
-    const [leaderboardWithInfo] = await db.query(`
-      SELECT 
-        l.*,
-        u.full_name,
-        u.avatar_url,
-        u.school,
-        u.state,
-        u.country,
-        u.bio
-      FROM leaderboard l
-      JOIN users u ON l.user_id = u.id
-      ORDER BY l.rank_position ASC
-      LIMIT $1
-    `, [parseInt(limit)]);
+    // Update or insert into leaderboard (PostgreSQL uses ON CONFLICT instead of ON DUPLICATE KEY UPDATE)
+    // Only update if leaderboard table exists
+    try {
+      for (const user of rankedUsers) {
+        await db.query(`
+          INSERT INTO leaderboard (user_id, username, points, level, rank_position)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (user_id) DO UPDATE SET
+            username = EXCLUDED.username,
+            points = EXCLUDED.points,
+            level = EXCLUDED.level,
+            rank_position = EXCLUDED.rank_position
+        `, [user.id, user.username, user.points, user.level, user.rank_pos]);
+      }
+    } catch (leaderboardError) {
+      // If leaderboard table doesn't exist or update fails, continue without updating
+      console.warn('Could not update leaderboard table:', leaderboardError.message);
+    }
+
+    // Get leaderboard - try from leaderboard table first, fallback to direct user query
+    let leaderboardWithInfo;
+    try {
+      const [result] = await db.query(`
+        SELECT 
+          l.*,
+          u.full_name,
+          u.avatar_url,
+          u.school,
+          u.state,
+          u.country,
+          u.bio
+        FROM leaderboard l
+        JOIN users u ON l.user_id = u.id
+        ORDER BY l.rank_position ASC
+        LIMIT $1
+      `, [parseInt(limit)]);
+      leaderboardWithInfo = result;
+    } catch (leaderboardQueryError) {
+      // Fallback: return ranked users directly if leaderboard table doesn't exist
+      console.warn('Leaderboard table query failed, using direct user query:', leaderboardQueryError.message);
+      leaderboardWithInfo = rankedUsers.slice(0, parseInt(limit)).map((user, index) => ({
+        user_id: user.id,
+        username: user.username,
+        points: user.points,
+        level: user.level,
+        rank_position: index + 1,
+        full_name: user.full_name,
+        avatar_url: user.avatar_url,
+        school: user.school,
+        state: user.state,
+        country: user.country,
+        bio: user.bio
+      }));
+    }
 
     res.json({ leaderboard: leaderboardWithInfo });
-    return;
 
   } catch (error) {
     console.error('Get leaderboard error:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error details:', {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+      hint: error.hint
+    });
+    
+    // Provide more specific error messages
+    if (error.code === '42P01') { // undefined_table
+      res.status(500).json({ 
+        error: 'Database table not found',
+        hint: 'The users or leaderboard table does not exist. Please check database setup.'
+      });
+    } else {
+      res.status(500).json({ 
+        error: 'Server error',
+        hint: 'Please check server logs for details',
+        errorCode: error.code || 'UNKNOWN'
+      });
+    }
   }
 });
 

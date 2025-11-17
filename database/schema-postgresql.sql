@@ -11,6 +11,13 @@ CREATE TABLE IF NOT EXISTS users (
   role VARCHAR(20) DEFAULT 'learner' CHECK (role IN ('learner', 'instructor', 'admin')),
   points INT DEFAULT 0,
   level INT DEFAULT 1,
+  school VARCHAR(255),
+  state VARCHAR(100),
+  country VARCHAR(100),
+  bio TEXT,
+  phone VARCHAR(20),
+  date_of_birth DATE,
+  website VARCHAR(255),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
