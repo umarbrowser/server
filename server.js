@@ -8,6 +8,7 @@ import aiRoutes from './routes/aiRoutes.js';
 import flashcardRoutes from './routes/flashcardRoutes.js';
 import quizRoutes from './routes/quizRoutes.js';
 import statsRoutes from './routes/statsRoutes.js';
+import { initializeDatabase } from './database/init.js';
 
 dotenv.config();
 
@@ -115,28 +116,35 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Start server with error handling
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 EduAI Platform Server running on port ${PORT}`);
-  console.log(`📚 API available at http://localhost:${PORT}/api`);
-  console.log(`✅ Health check: http://localhost:${PORT}/health`);
-});
-
-// Handle server errors
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use. Please use a different port.`);
-  } else {
-    console.error('❌ Server error:', error);
-  }
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
-  server.close(() => {
-    console.log('HTTP server closed');
+// Initialize database and start server
+async function startServer() {
+  // Initialize database schema automatically
+  await initializeDatabase();
+  
+  // Start server with error handling
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 EduAI Platform Server running on port ${PORT}`);
+    console.log(`📚 API available at http://localhost:${PORT}/api`);
+    console.log(`✅ Health check: http://localhost:${PORT}/health`);
   });
-});
 
+  // Handle server errors
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`❌ Port ${PORT} is already in use. Please use a different port.`);
+    } else {
+      console.error('❌ Server error:', error);
+    }
+    process.exit(1);
+  });
+
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received: closing HTTP server');
+    server.close(() => {
+      console.log('HTTP server closed');
+    });
+  });
+}
+
+startServer();
