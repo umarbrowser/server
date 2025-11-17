@@ -180,12 +180,31 @@ router.post('/login', async (req, res) => {
 // Get current user
 router.get('/me', authenticateToken, async (req, res) => {
   try {
-    const [users] = await db.query(
-      `SELECT id, username, email, full_name, role, points, level, avatar_url, 
-       school, state, country, bio, phone, date_of_birth, website, created_at 
-       FROM users WHERE id = $1`,
-      [req.user.userId]
-    );
+    // Try with optional columns first, fallback if they don't exist
+    let users;
+    try {
+      [users] = await db.query(
+        `SELECT id, username, email, full_name, role, points, level, avatar_url, 
+         school, state, country, bio, phone, date_of_birth, website, created_at 
+         FROM users WHERE id = $1`,
+        [req.user.userId]
+      );
+    } catch (error) {
+      // If optional columns don't exist, query without them
+      if (error.code === '42703') { // undefined_column
+        console.warn('Optional profile columns not found, using basic query');
+        [users] = await db.query(
+          `SELECT id, username, email, full_name, role, points, level, avatar_url, 
+           NULL::VARCHAR as school, NULL::VARCHAR as state, NULL::VARCHAR as country, 
+           NULL::TEXT as bio, NULL::VARCHAR as phone, NULL::DATE as date_of_birth, 
+           NULL::VARCHAR as website, created_at 
+           FROM users WHERE id = $1`,
+          [req.user.userId]
+        );
+      } else {
+        throw error;
+      }
+    }
 
     if (users.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -261,18 +280,61 @@ router.put('/profile', authenticateToken, async (req, res) => {
 
     values.push(req.user.userId);
 
-    await db.query(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
-      values
-    );
+    try {
+      await db.query(
+        `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
+        values
+      );
+    } catch (updateError) {
+      // If columns don't exist, filter them out and retry
+      if (updateError.code === '42703') { // undefined_column
+        console.warn('Some profile columns not found, filtering them out');
+        // Filter out optional columns that might not exist
+        const basicUpdates = updates.filter(update => {
+          const column = update.split('=')[0].trim();
+          return !['school', 'state', 'country', 'bio', 'phone', 'date_of_birth', 'website'].includes(column);
+        });
+        
+        if (basicUpdates.length === 0) {
+          return res.status(400).json({ 
+            error: 'Profile columns not yet available. Please wait for database migration to complete.' 
+          });
+        }
+        
+        // Rebuild values array with only basic fields
+        const basicValues = [req.user.userId];
+        await db.query(
+          `UPDATE users SET ${basicUpdates.join(', ')} WHERE id = $1`,
+          basicValues
+        );
+      } else {
+        throw updateError;
+      }
+    }
 
-    // Get updated user
-    const [users] = await db.query(
-      `SELECT id, username, email, full_name, role, points, level, avatar_url, 
-       school, state, country, bio, phone, date_of_birth, website, created_at 
-       FROM users WHERE id = $1`,
-      [req.user.userId]
-    );
+    // Get updated user (with fallback for missing columns)
+    let users;
+    try {
+      [users] = await db.query(
+        `SELECT id, username, email, full_name, role, points, level, avatar_url, 
+         school, state, country, bio, phone, date_of_birth, website, created_at 
+         FROM users WHERE id = $1`,
+        [req.user.userId]
+      );
+    } catch (error) {
+      if (error.code === '42703') {
+        [users] = await db.query(
+          `SELECT id, username, email, full_name, role, points, level, avatar_url, 
+           NULL::VARCHAR as school, NULL::VARCHAR as state, NULL::VARCHAR as country, 
+           NULL::TEXT as bio, NULL::VARCHAR as phone, NULL::DATE as date_of_birth, 
+           NULL::VARCHAR as website, created_at 
+           FROM users WHERE id = $1`,
+          [req.user.userId]
+        );
+      } else {
+        throw error;
+      }
+    }
 
     res.json({ user: users[0], message: 'Profile updated successfully' });
   } catch (error) {

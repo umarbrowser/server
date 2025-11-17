@@ -135,22 +135,49 @@ router.get('/leaderboard', async (req, res) => {
     const { limit = 50 } = req.query;
 
     // Get all users with their ranks using PostgreSQL window functions
-    const [rankedUsers] = await db.query(`
-      SELECT 
-        u.id,
-        u.username,
-        u.full_name,
-        u.points,
-        u.level,
-        u.avatar_url,
-        u.school,
-        u.state,
-        u.country,
-        u.bio,
-        ROW_NUMBER() OVER (ORDER BY u.points DESC, u.level DESC) as rank_pos
-      FROM users u
-      ORDER BY u.points DESC, u.level DESC
-    `);
+    // Try with optional columns first, fallback if they don't exist
+    let rankedUsers;
+    try {
+      [rankedUsers] = await db.query(`
+        SELECT 
+          u.id,
+          u.username,
+          u.full_name,
+          u.points,
+          u.level,
+          u.avatar_url,
+          u.school,
+          u.state,
+          u.country,
+          u.bio,
+          ROW_NUMBER() OVER (ORDER BY u.points DESC, u.level DESC) as rank_pos
+        FROM users u
+        ORDER BY u.points DESC, u.level DESC
+      `);
+    } catch (error) {
+      // If optional columns don't exist, query without them
+      if (error.code === '42703') { // undefined_column
+        console.warn('Optional profile columns not found, using basic query');
+        [rankedUsers] = await db.query(`
+          SELECT 
+            u.id,
+            u.username,
+            u.full_name,
+            u.points,
+            u.level,
+            u.avatar_url,
+            NULL::VARCHAR as school,
+            NULL::VARCHAR as state,
+            NULL::VARCHAR as country,
+            NULL::TEXT as bio,
+            ROW_NUMBER() OVER (ORDER BY u.points DESC, u.level DESC) as rank_pos
+          FROM users u
+          ORDER BY u.points DESC, u.level DESC
+        `);
+      } else {
+        throw error;
+      }
+    }
 
     // If no users, return empty leaderboard
     if (!rankedUsers || rankedUsers.length === 0) {
@@ -195,21 +222,58 @@ router.get('/leaderboard', async (req, res) => {
       `, [parseInt(limit)]);
       leaderboardWithInfo = result;
     } catch (leaderboardQueryError) {
-      // Fallback: return ranked users directly if leaderboard table doesn't exist
-      console.warn('Leaderboard table query failed, using direct user query:', leaderboardQueryError.message);
-      leaderboardWithInfo = rankedUsers.slice(0, parseInt(limit)).map((user, index) => ({
-        user_id: user.id,
-        username: user.username,
-        points: user.points,
-        level: user.level,
-        rank_position: index + 1,
-        full_name: user.full_name,
-        avatar_url: user.avatar_url,
-        school: user.school,
-        state: user.state,
-        country: user.country,
-        bio: user.bio
-      }));
+      // If columns don't exist, try without them
+      if (leaderboardQueryError.code === '42703') {
+        try {
+          const [result] = await db.query(`
+            SELECT 
+              l.*,
+              u.full_name,
+              u.avatar_url,
+              NULL::VARCHAR as school,
+              NULL::VARCHAR as state,
+              NULL::VARCHAR as country,
+              NULL::TEXT as bio
+            FROM leaderboard l
+            JOIN users u ON l.user_id = u.id
+            ORDER BY l.rank_position ASC
+            LIMIT $1
+          `, [parseInt(limit)]);
+          leaderboardWithInfo = result;
+        } catch (fallbackError) {
+          // Fallback: return ranked users directly if leaderboard table doesn't exist
+          console.warn('Leaderboard table query failed, using direct user query:', fallbackError.message);
+          leaderboardWithInfo = rankedUsers.slice(0, parseInt(limit)).map((user, index) => ({
+            user_id: user.id,
+            username: user.username,
+            points: user.points,
+            level: user.level,
+            rank_position: index + 1,
+            full_name: user.full_name,
+            avatar_url: user.avatar_url,
+            school: user.school || null,
+            state: user.state || null,
+            country: user.country || null,
+            bio: user.bio || null
+          }));
+        }
+      } else {
+        // Fallback: return ranked users directly if leaderboard table doesn't exist
+        console.warn('Leaderboard table query failed, using direct user query:', leaderboardQueryError.message);
+        leaderboardWithInfo = rankedUsers.slice(0, parseInt(limit)).map((user, index) => ({
+          user_id: user.id,
+          username: user.username,
+          points: user.points,
+          level: user.level,
+          rank_position: index + 1,
+          full_name: user.full_name,
+          avatar_url: user.avatar_url,
+          school: user.school || null,
+          state: user.state || null,
+          country: user.country || null,
+          bio: user.bio || null
+        }));
+      }
     }
 
     res.json({ leaderboard: leaderboardWithInfo });
