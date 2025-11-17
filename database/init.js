@@ -11,6 +11,91 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
+ * Parse SQL statements handling PostgreSQL dollar-quoted strings
+ * @param {string} sql - SQL content
+ * @returns {string[]} Array of SQL statements
+ */
+function parseSQLStatements(sql) {
+  const statements = [];
+  let currentStatement = '';
+  let inDollarQuote = false;
+  let dollarTag = '';
+  let i = 0;
+
+  while (i < sql.length) {
+    const char = sql[i];
+    const nextChar = sql[i + 1];
+
+    // Check for dollar-quoted strings ($$ or $tag$)
+    if (char === '$' && !inDollarQuote) {
+      // Check if this is the start of a dollar quote
+      let tagEnd = sql.indexOf('$', i + 1);
+      if (tagEnd > i) {
+        dollarTag = sql.substring(i, tagEnd + 1);
+        inDollarQuote = true;
+        currentStatement += dollarTag;
+        i = tagEnd + 1;
+        continue;
+      }
+    }
+
+    // Check for end of dollar quote
+    if (inDollarQuote && sql.substring(i).startsWith(dollarTag)) {
+      currentStatement += dollarTag;
+      i += dollarTag.length;
+      inDollarQuote = false;
+      dollarTag = '';
+      continue;
+    }
+
+    // If we're in a dollar quote, just add the character
+    if (inDollarQuote) {
+      currentStatement += char;
+      i++;
+      continue;
+    }
+
+    // Check for comments
+    if (char === '-' && nextChar === '-') {
+      // Skip to end of line
+      while (i < sql.length && sql[i] !== '\n') {
+        currentStatement += sql[i];
+        i++;
+      }
+      if (i < sql.length) {
+        currentStatement += sql[i]; // include the newline
+        i++;
+      }
+      continue;
+    }
+
+    // Check for statement terminator (semicolon outside of dollar quotes)
+    if (char === ';' && !inDollarQuote) {
+      currentStatement += char;
+      const trimmed = currentStatement.trim();
+      if (trimmed && trimmed !== ';') {
+        statements.push(trimmed);
+      }
+      currentStatement = '';
+      i++;
+      continue;
+    }
+
+    // Add character to current statement
+    currentStatement += char;
+    i++;
+  }
+
+  // Add any remaining statement
+  const trimmed = currentStatement.trim();
+  if (trimmed) {
+    statements.push(trimmed);
+  }
+
+  return statements;
+}
+
+/**
  * Initialize database schema automatically
  * This function is idempotent - safe to run multiple times
  * @returns {Promise<boolean>} Returns true if successful, false otherwise
@@ -44,8 +129,8 @@ export async function initializeDatabase() {
     const schemaPath = path.join(__dirname, 'schema-postgresql.sql');
     const schema = fs.readFileSync(schemaPath, 'utf8');
     
-    // Split by semicolons and execute each statement
-    const statements = schema.split(';').filter(stmt => stmt.trim().length > 0);
+    // Parse SQL statements properly handling PostgreSQL dollar-quoted strings
+    const statements = parseSQLStatements(schema);
     
     let successCount = 0;
     let skipCount = 0;
